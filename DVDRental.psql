@@ -1,4 +1,3 @@
--- In order to get the insights on each customer, we start by creating the base dataset joining all relevant tables => base_dataset
 DROP TABLE IF EXISTS combined_dataset;
 CREATE TEMP TABLE combined_dataset AS
 SELECT
@@ -149,3 +148,127 @@ WHERE NOT EXISTS (
   AND customer_watched.film_id = film_total_rentals.film_id))
 SELECT * FROM reco_table WHERE movie_reco_rank <=3;
 
+
+
+
+
+-- ========================================================================Category Recommendations ends here==============================================================
+
+DROP TABLE IF EXISTS combined_actor_dataset;
+CREATE TEMP TABLE combined_actor_dataset AS
+SELECT
+  rental.customer_id,
+  rental.rental_date,
+  rental.rental_id,
+  inventory.film_id,
+  film.title,
+  actor.actor_id,
+  actor.first_name,
+  actor.last_name
+FROM
+  dvd_rentals.rental INNER JOIN
+  dvd_rentals.inventory ON rental.inventory_id = inventory.inventory_id
+  INNER JOIN dvd_rentals.film ON inventory.film_id = film.film_id
+  INNER JOIN dvd_rentals.film_actor ON film.film_id = film_actor.film_id
+  INNER JOIN dvd_rentals.actor ON film_actor.actor_id = actor.actor_id;
+
+DROP TABLE IF EXISTS customer_top_actor;
+CREATE TEMP TABLE customer_top_actor AS
+WITH customer_rental_count AS (
+SELECT
+  customer_id,
+  actor_id,
+  first_name,
+  last_name,
+  COUNT(*) as customer_actor_rental_count,
+  MAX(rental_date) as customer_actor_latest_rental
+FROM combined_actor_dataset
+GROUP BY 1,2,3,4),
+ranked_customer_rental_count AS (
+SELECT
+  customer_id,
+  actor_id,
+  first_name,
+  last_name,
+  customer_actor_rental_count,
+  DENSE_RANK() OVER (
+    PARTITION BY customer_id 
+    ORDER BY 
+      customer_actor_rental_count DESC, 
+      customer_actor_latest_rental DESC, 
+      first_name, 
+      last_name) AS customer_actor_rank
+FROM customer_rental_count)
+SELECT
+    customer_id,
+    actor_id,
+    first_name,
+    last_name,
+    customer_actor_rental_count
+FROM
+  ranked_customer_rental_count
+WHERE
+  customer_actor_rank = 1;
+
+-- total number of times a movie is rented out
+DROP TABLE IF EXISTS global_movie_counts;
+CREATE TEMP TABLE global_movie_counts AS 
+SELECT
+  film_id,
+  COUNT(DISTINCT rental_id) as total_film_rentals
+FROM
+  combined_actor_dataset
+GROUP BY 1;
+
+
+-- total number of rentals against a movie is nothing but the total number of rentals against the actor.
+DROP TABLE IF EXISTS actor_total_film_counts;
+CREATE TEMP TABLE actor_total_film_counts AS 
+SELECT DISTINCT
+  combined_actor_dataset.film_id,
+  combined_actor_dataset.actor_id,
+  combined_actor_dataset.title,
+  global_movie_counts.total_film_rentals
+FROM
+  combined_actor_dataset
+  LEFT JOIN global_movie_counts
+  ON combined_actor_dataset.film_id = global_movie_counts.film_id;
+  
+DROP TABLE IF EXISTS actor_movie_exclusion;
+CREATE TEMP TABLE actor_movie_exclusion AS
+(SELECT
+  customer_id,
+  film_id
+FROM combined_dataset)
+UNION
+(SELECT 
+  customer_id,
+  film_id
+FROM movie_recommendation);
+
+
+DROP TABLE IF EXISTS final_actor_recommendation;
+CREATE TEMP TABLE final_actor_recommendation AS
+WITH ranked_final_recommendations AS(
+SELECT 
+  customer_top_actor.customer_id,
+  customer_top_actor.first_name,
+  customer_top_actor.last_name,
+  customer_top_actor.customer_actor_rental_count,
+  actor_total_film_counts.title,
+  actor_total_film_counts.film_id,
+  actor_total_film_counts.actor_id,
+  DENSE_RANK() OVER(PARTITION BY customer_top_actor.customer_id ORDER BY actor_total_film_counts.total_film_rentals DESC, actor_total_film_counts.title) as actor_movie_rank
+FROM
+  customer_top_actor INNER JOIN actor_total_film_counts
+  ON customer_top_actor.actor_id = actor_total_film_counts.actor_id
+WHERE NOT EXISTS(
+  SELECT 1
+  FROM actor_movie_exclusion
+  WHERE
+    actor_movie_exclusion.customer_id = customer_top_actor.customer_id AND
+    actor_movie_exclusion.film_id = actor_total_film_counts.film_id))
+SELECT * FROM ranked_final_recommendations
+WHERE actor_movie_rank<=3;
+
+SELECT * FROM final_actor_recommendation;
