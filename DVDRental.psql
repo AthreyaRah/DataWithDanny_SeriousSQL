@@ -138,7 +138,7 @@ SELECT
   top_2_categories.category_rank,
   film_total_rentals.film_id,
   film_total_rentals.title,
-  DENSE_RANK() OVER (PARTITION BY top_2_categories.customer_id, top_2_categories.category_name ORDER BY film_total_rentals.total_film_rentals DESC, film_total_rentals.title) as movie_reco_rank
+  DENSE_RANK() OVER (PARTITION BY top_2_categories.customer_id, top_2_categories.category_rank ORDER BY film_total_rentals.total_film_rentals DESC, film_total_rentals.title) as movie_reco_rank
 FROM top_2_categories
 INNER JOIN film_total_rentals
 ON top_2_categories.category_name = film_total_rentals.category_name
